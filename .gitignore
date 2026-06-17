@@ -1,0 +1,22 @@
+# Ignore all data files
+data/raw/
+data/processed/
+
+# Keep directory structure if desired
+!data/
+!data/Readme.md
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Virtual environments
+.venv/
+venv/
+env/*

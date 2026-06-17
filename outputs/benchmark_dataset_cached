@@ -1,0 +1,31 @@
+macOS 
+python3 benchmarks/benchmark_dataset.py
+files read [PosixPath('/Users/vincent/Documents/HPC_PU/HPC_CENTRE/Activities/2026/PythonAI/ecg_ai/data/processed/00.npz'), PosixPath('/Users/vincent/Documents/HPC_PU/HPC_CENTRE/Activities/2026/PythonAI/ecg_ai/data/processed/01.npz'), PosixPath('/Users/vincent/Documents/HPC_PU/HPC_CENTRE/Activities/2026/PythonAI/ecg_ai/data/processed/03.npz')]
+Dataset size: 23,685
+
+
+=== Slow Dataset ===
+Batches processed : 101
+Samples processed : 12,928
+Elapsed time      : 3068.22 s
+Throughput        : 4.2 samples/s
+python3 benchmarks/benchmark_dataset_cached.py
+python3 benchmarks/benchmark_dataset_cached.py
+
+
+=== Cached Dataset (0 workers) ===
+Samples processed : 12,928
+Elapsed time      : 0.10 s
+Throughput        : 128127.2 samples/s
+
+=== Cached Dataset (2 workers) ===
+Samples processed : 12,928
+Elapsed time      : 12.49 s
+Throughput        : 1034.8 samples/s
+
+=== Cached Dataset (4 workers) ===
+Samples processed : 12,928
+Elapsed time      : 24.58 s
+Throughput        : 526.0 samples/s
+
+
