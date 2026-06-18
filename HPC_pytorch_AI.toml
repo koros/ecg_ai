@@ -3,6 +3,7 @@ human_name = "HPC Pytorch "
 pip_packages = "wfdb fsspec" 
 modules = [
   "spack-modules/293",
+  "compilers/llvm/14.0.6-xpvm6vv",
   "openmpi/5.0.5-pplxwdu",
   "python-science/py-numpy-py3.11/1.26.4-k5adanv",
   "python-science/py-numba-py3.11/0.59.1-ijsufvg",

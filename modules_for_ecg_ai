@@ -1,0 +1,11 @@
+module purge
+module load spack-modules/293
+module load compilers/llvm/14.0.6-xpvm6vv
+module load openmpi/5.0.5-pplxwdu
+module load python-science/py-numpy-py3.11/1.26.4-k5adanv
+module load python-science/py-numba-py3.11/0.59.1-ijsufvg
+module load py-virtualenv-py3.11/20.26.6-xqjpfog
+module load deeplearning/py-torch-py3.11/2.8.0-3feiiad
+module load python-science/py-matplotlib-py3.11/3.10.6-ogsaoll
+module load python-science/py-pandas-py3.11/2.3.2-wr7hjzs
+module load python-science/py-scipy-py3.11/1.16.1-g5b6aib
