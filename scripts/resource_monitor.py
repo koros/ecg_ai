@@ -78,14 +78,14 @@ def sample_gpu(handle):
     sm_clock = safe(lambda: pynvml.nvmlDeviceGetClockInfo(handle, pynvml.NVML_CLOCK_SM))
 
     return {
-        "gpu_util_pct": util.gpu,
-        "gpu_mem_util_pct": util.memory,
-        "gpu_mem_used_mb": round(mem.used / (1024 ** 2), 1),
-        "gpu_mem_total_mb": round(mem.total / (1024 ** 2), 1),
-        "gpu_temp_c": temp,
-        "gpu_power_w": power_w,
-        "gpu_fan_pct": fan,
-        "gpu_sm_clock_mhz": sm_clock,
+        "util_pct": util.gpu,
+        "mem_util_pct": util.memory,
+        "mem_used_mb": round(mem.used / (1024 ** 2), 1),
+        "mem_total_mb": round(mem.total / (1024 ** 2), 1),
+        "temp_c": temp,
+        "power_w": power_w,
+        "fan_pct": fan,
+        "sm_clock_mhz": sm_clock,
     }
 
 

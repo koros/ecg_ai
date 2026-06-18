@@ -58,7 +58,16 @@ def parse_args():
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "mps", "cuda"])
     parser.add_argument("--dataclass", default="fast", choices=["slow", "medium", "fast"])
     parser.add_argument("--epochs", type=int, default=10)
-    parser.add_argument("--profile", action="store_true")
+    parser.add_argument("--profile", action="store_true",
+                        help="manual stage-by-stage timing (load/transfer/forward/backward/opt)")
+    parser.add_argument("--torch_profile", action="store_true",
+                        help="use torch.profiler for per-op CPU/GPU traces; writes a trace "
+                             "directory readable by TensorBoard")
+    parser.add_argument("--torch_profile_dir", default="torch_profiler_logs",
+                        help="output directory for torch.profiler traces (default: torch_profiler_logs)")
+    parser.add_argument("--torch_profile_steps", type=int, default=10,
+                        help="number of training steps to profile with torch.profiler (default: 10). "
+                             "Keep this small -- traces get large fast and profiling adds overhead.")
     return parser.parse_args()
 
 
@@ -148,6 +157,62 @@ def print_profile_breakdown(timing):
         print(f"{label:12s}: {100 * timing[key] / total:.1f}%")
 
 
+def run_torch_profiler(model, train_loader, optimizer, criterion, device, out_dir, num_steps):
+    """Profile a handful of training steps with torch.profiler.
+
+    Uses the built-in schedule: 1 wait step, 1 warmup step, then
+    `num_steps` active steps are recorded. Traces are written via
+    tensorboard_trace_handler, so the output directory can be opened
+    directly with `tensorboard --logdir <out_dir>`.
+
+    This runs as a short separate pass before the main training loop --
+    it does not affect epoch counts, loss curves, or the --profile
+    timing breakdown, and the model state it leaves behind (a few
+    optimizer steps on real data) is harmless to continue training from.
+    """
+    from torch.profiler import profile, schedule, tensorboard_trace_handler, ProfilerActivity
+
+    activities = [ProfilerActivity.CPU]
+    if device.type == "cuda":
+        activities.append(ProfilerActivity.CUDA)
+
+    prof_schedule = schedule(wait=1, warmup=1, active=num_steps, repeat=1)
+    model.train()
+    loader_iter = iter(train_loader)
+
+    print(f"\nRunning torch.profiler for {num_steps} steps (+1 wait, +1 warmup) "
+          f"-> writing trace to {out_dir}")
+
+    with profile(
+        activities=activities,
+        schedule=prof_schedule,
+        on_trace_ready=tensorboard_trace_handler(out_dir),
+        record_shapes=True,
+        profile_memory=True,
+        with_stack=True,
+    ) as prof:
+        for _ in range(num_steps + 2):  # +1 wait, +1 warmup
+            try:
+                x, y = next(loader_iter)
+            except StopIteration:
+                loader_iter = iter(train_loader)
+                x, y = next(loader_iter)
+
+            x = x.to(device)
+            y = y.to(device)
+
+            optimizer.zero_grad()
+            logits = model(x)
+            loss = criterion(logits, y)
+            loss.backward()
+            optimizer.step()
+
+            prof.step()
+
+    print(f"torch.profiler trace written to {out_dir}")
+    print(f"View with: tensorboard --logdir {out_dir}")
+
+
 def evaluate(model, val_loader, device):
     correct = 0
     total = 0
@@ -178,6 +243,12 @@ def main():
     model = MLP().to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+
+    if args.torch_profile:
+        run_torch_profiler(
+            model, train_loader, optimizer, criterion, device,
+            args.torch_profile_dir, args.torch_profile_steps,
+        )
 
     start_training = time.perf_counter()
     for epoch in range(args.epochs):
