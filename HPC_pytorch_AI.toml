@@ -1,0 +1,15 @@
+name = "HPC_pytorch_AI"
+human_name = "HPC Pytorch "
+pip_packages = "wfdb fsspec" 
+modules = [
+  "spack-modules/293",
+  "openmpi/5.0.5-pplxwdu",
+  "python-science/py-numpy-py3.11/1.26.4-k5adanv",
+  "python-science/py-numba-py3.11/0.59.1-ijsufvg",
+  "py-virtualenv-py3.11/20.26.6-xqjpfog",
+  "deeplearning/py-torch-py3.11/2.8.0-3feiiad",
+  "python-science/py-matplotlib-py3.11/3.10.6-ogsaoll",
+  "python-science/py-pandas-py3.11/2.3.2-wr7hjzs",
+  "python-science/py-scipy-py3.11/1.16.1-g5b6aib",
+]
+
