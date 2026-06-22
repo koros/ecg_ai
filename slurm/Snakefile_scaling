@@ -1,0 +1,148 @@
+"""
+Snakefile_scaling
+
+Strong-scaling sweep for the two architectures (1D ResNet, dual-branch
+CNN+Transformer). One rule per (architecture, size, gpu_count) combination.
+Each run launches torchrun --nproc_per_node=N internally.
+
+DOES NOT use Snakemake's --executor slurm -- instead, this entire
+Snakemake invocation runs inside ONE sbatch job that has been allocated
+all the GPUs on the node (e.g. --gres=gpu:4). Each torchrun call
+within a rule uses whichever N <= total_gpus it's been asked to use.
+
+This sequential approach is simpler than per-rule SLURM submission and
+works fine for a workshop-scale sweep (~16 runs * ~1-3 min each = under
+an hour total for one architecture/node combination).
+
+Usage:
+    # Inside a SLURM job that has --gres=gpu:4 (H100 node) or :8 (L40s)
+    module load workflow/snakemake-py3.11/8.25.2-7fyrsgt
+    . /users/${USER}/.jupyter_virtualenvs/HPC_pytorch_AI/bin/activate
+
+    # H100 node sweep (1, 2, 4 GPUs)
+    snakemake -s Snakefile_scaling --cores 1 -p --config node=h100
+
+    # L40s node sweep (1, 2, 4, 8 GPUs)
+    snakemake -s Snakefile_scaling --cores 1 -p --config node=l40s
+"""
+
+NODE = config.get("node", "h100")
+
+if NODE == "h100":
+    GPU_COUNTS = [1, 2, 4]
+elif NODE == "l40s":
+    GPU_COUNTS = [1, 2, 4, 8]
+else:
+    raise ValueError(f"unknown node {NODE!r} -- use --config node=h100 or l40s")
+
+RESULT_CSV = f"results_scaling_{NODE}.csv"
+BATCH_SIZE = 8192
+EPOCHS = 10
+
+# ----------------------------------------------------------------
+# ResNet1d size sweep -- three sizes covering small/medium/large
+# Each tuple is (label, base_width, depth)
+# ----------------------------------------------------------------
+RESNET_SIZES = {
+    "small":  {"base_width": 32, "depth": 2},   # ~1M params
+    "medium": {"base_width": 64, "depth": 4},   # ~8M params
+    "large":  {"base_width": 128, "depth": 4},  # ~32M params
+}
+
+# ----------------------------------------------------------------
+# DualBranchECG size sweep
+# ----------------------------------------------------------------
+DUAL_SIZES = {
+    "small":  {"cnn_width": 32,  "cnn_depth": 2, "tf_width": 64,  "tf_depth": 2, "tf_heads": 4},
+    "medium": {"cnn_width": 64,  "cnn_depth": 4, "tf_width": 128, "tf_depth": 4, "tf_heads": 4},
+    "large":  {"cnn_width": 128, "cnn_depth": 4, "tf_width": 256, "tf_depth": 6, "tf_heads": 8},
+}
+
+SCRIPTS_DIR = "../scripts"
+
+
+rule all:
+    input:
+        expand("results/resnet1d_{size}_n{nproc}.csv",
+               size=RESNET_SIZES.keys(), nproc=GPU_COUNTS),
+        expand("results/dual_{size}_n{nproc}.csv",
+               size=DUAL_SIZES.keys(), nproc=GPU_COUNTS),
+        f"benchmark_combined_{NODE}.csv"
+
+
+rule run_resnet:
+    output:
+        csv="results/resnet1d_{size}_n{nproc}.csv"
+    params:
+        base_width=lambda wc: RESNET_SIZES[wc.size]["base_width"],
+        depth=lambda wc: RESNET_SIZES[wc.size]["depth"],
+    shell:
+        """
+        mkdir -p results
+        torchrun --standalone --nnodes=1 --nproc_per_node={wildcards.nproc} \\
+            {SCRIPTS_DIR}/train_resnet1d.py \\
+            --base_width {params.base_width} \\
+            --depth {params.depth} \\
+            --batch_size {BATCH_SIZE} \\
+            --epochs {EPOCHS} \\
+            --tf32 --mixed_precision \\
+            --result_csv {output.csv}
+        """
+
+
+rule run_dual:
+    output:
+        csv="results/dual_{size}_n{nproc}.csv"
+    params:
+        cnn_width=lambda wc: DUAL_SIZES[wc.size]["cnn_width"],
+        cnn_depth=lambda wc: DUAL_SIZES[wc.size]["cnn_depth"],
+        tf_width=lambda wc: DUAL_SIZES[wc.size]["tf_width"],
+        tf_depth=lambda wc: DUAL_SIZES[wc.size]["tf_depth"],
+        tf_heads=lambda wc: DUAL_SIZES[wc.size]["tf_heads"],
+    shell:
+        """
+        mkdir -p results
+        torchrun --standalone --nnodes=1 --nproc_per_node={wildcards.nproc} \\
+            {SCRIPTS_DIR}/train_dual.py \\
+            --cnn_width {params.cnn_width} \\
+            --cnn_depth {params.cnn_depth} \\
+            --tf_width {params.tf_width} \\
+            --tf_depth {params.tf_depth} \\
+            --tf_heads {params.tf_heads} \\
+            --batch_size {BATCH_SIZE} \\
+            --epochs {EPOCHS} \\
+            --tf32 --mixed_precision \\
+            --result_csv {output.csv}
+        """
+
+
+rule combine_results:
+    """Concatenate every per-run CSV into one combined results file.
+
+    Note: the two architectures have DIFFERENT column sets (ResNet has
+    base_width/depth; Dual has cnn_width/cnn_depth/tf_*), so we can't
+    just concatenate them directly with a shared header. We use pandas
+    to do an outer-join concat that produces a single CSV with the union
+    of all columns -- empty cells where a column doesn't apply for that
+    architecture. This is the most useful format for downstream plotting,
+    since you can filter by `architecture` first and then look at the
+    relevant columns.
+    """
+    input:
+        resnet=expand("results/resnet1d_{size}_n{nproc}.csv",
+                     size=RESNET_SIZES.keys(), nproc=GPU_COUNTS),
+        dual=expand("results/dual_{size}_n{nproc}.csv",
+                   size=DUAL_SIZES.keys(), nproc=GPU_COUNTS),
+    output:
+        csv=f"benchmark_combined_{NODE}.csv"
+    run:
+        import pandas as pd
+        all_inputs = list(input.resnet) + list(input.dual)
+        dfs = []
+        for path in all_inputs:
+            try:
+                dfs.append(pd.read_csv(path))
+            except Exception as e:
+                print(f"WARNING: could not read {path}: {e}")
+        combined = pd.concat(dfs, ignore_index=True, sort=False)
+        combined.to_csv(output.csv, index=False)

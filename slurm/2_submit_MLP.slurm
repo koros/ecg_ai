@@ -2,7 +2,7 @@
 #SBATCH -J AI_profile
 #SBATCH -N 1
 #SBATCH -n 4
-#SBATCH -t 00:10:00
+#SBATCH -t 01:00:00
 #SBATCH -p gpu_h100
 #SBATCH --mincpus=4
 #SBATCH --gres=gpu:1
@@ -17,13 +17,17 @@ TRACE_DIR="torch_profiler_logs_${SLURM_JOB_ID}"
 
 # A handful of profiled steps is enough -- traces grow fast and profiling
 # adds CPU/GPU overhead, so don't profile a full training run with this.
-python ../scripts/train_MLP_torch_profiler.py \
+
+EXE=train_MLP_exp.py
+
+python ../scripts/${EXE} \
     --epochs 1 \
     --device cuda \
     --dataclass fast \
     --torch_profile \
     --torch_profile_dir "${TRACE_DIR}" \
     --torch_profile_steps 10 &
+
 TRAIN_PID=$!
 
 python ../scripts/resource_monitor.py \

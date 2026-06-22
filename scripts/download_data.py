@@ -11,12 +11,14 @@ SMALL_RECORDS = [
     "03",
 ]
 
-DATABASE = "ltafdb"
+if args.mode == "small":
+    DATABASE = "ltafdb-small"
+else args.mode == "full":
+    DATABASE = "ltafdb"
 
 
 def download_subset(output_dir: Path):
     print(f"Downloading subset: {SMALL_RECORDS}")
-
     wfdb.dl_database(
         DATABASE,
         str(output_dir),

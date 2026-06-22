@@ -1,0 +1,278 @@
+"""
+Snakefile
+
+Benchmark grid for train_MLP_final3.py -- mirrors benchmark.slurm's tiers,
+as individual Snakemake rule instances instead of bash nested loops.
+
+Each run passes --result_csv pointing at its own per-run CSV (one row
+each), and a final lightweight rule concatenates them -- no stdout
+scraping needed.
+
+Usage:
+    module load workflow/snakemake-py3.11/8.25.2-7fyrsgt
+    . /users/${USER}/.jupyter_virtualenvs/HPC_pytorch_AI/bin/activate
+
+    snakemake -n                  # dry run -- lists all jobs without running
+    snakemake --cores 1 -p        # run everything serially on current GPU allocation
+
+Outputs:
+    results/tier1_<dataclass>_<nw>_<pin>.csv
+    results/tier2_<tf32>_<amp>.csv
+    results/tier3_<config>_<gpu>.csv
+    results/tier4_<bs>_<tf32>_<amp>.csv
+    benchmark_combined.csv   -- final concatenated results
+"""
+
+SCRIPT = "../scripts/train_MLP_exp.py"
+
+# ----------------------------------------------------------------
+# Tier 1 -- DataLoader benchmarks (fixed precision, vary loader settings)
+# "slow" dataclass excluded -- far too slow to be worth benchmarking.
+# ----------------------------------------------------------------
+DATACLASSES = ["medium", "fast"]
+NUM_WORKERS = [0, 2, 4]
+PIN_MEMORY = ["no", "yes"]
+TIER1_EPOCHS = 3
+
+# ----------------------------------------------------------------
+# Tier 2 -- Precision benchmarks (fixed loader settings, vary precision)
+# Uses --model big (the 17.85M-param MLP) since that's the model where
+# precision differences are expected to be visible at all.
+# ----------------------------------------------------------------
+TF32_OPTS = ["no", "yes"]
+AMP_OPTS = ["no", "yes"]
+TIER2_EPOCHS = 10
+
+# ----------------------------------------------------------------
+# Tier 3 -- GPU-resident dataset benchmark
+# Two loader configs (worst-case vs tuned) x data_on_gpu on/off.
+# ----------------------------------------------------------------
+TIER3_CONFIGS = {
+    "nw0":    {"num_workers": 0, "pin_memory": "no"},
+    "nw4pin": {"num_workers": 4, "pin_memory": "yes"},
+}
+DATA_ON_GPU_OPTS = ["no", "yes"]
+TIER3_EPOCHS = 10
+
+# ----------------------------------------------------------------
+# Tier 4 -- Manual batching benchmark (the "is it finally compute-bound"
+# test). Fixed: --model big --data_on_gpu --manual_batching. Varies
+# batch_size (256 vs 8192, as requested) crossed with tf32/mixed_precision.
+# If precision flags make a real difference here, it confirms the model
+# is now large enough to be GPU-compute-bound at the larger batch size.
+# ----------------------------------------------------------------
+TIER4_BATCH_SIZES = [256, 8192]
+TIER4_TF32_OPTS = ["no", "yes"]
+TIER4_AMP_OPTS = ["no", "yes"]
+TIER4_EPOCHS = 10
+
+# ----------------------------------------------------------------
+# Tier 5 -- MLP_huge benchmark: tests whether a much wider model
+# (~285M params, hidden_dim=8192) makes the bs=256 regime
+# compute-bound, where MLP (hidden_dim=2048) was not. Same flags as
+# Tier 4 but with --model huge; bs=256 is the interesting case here,
+# but bs=8192 is included for completeness/comparison.
+# ----------------------------------------------------------------
+TIER5_BATCH_SIZES = [256, 8192]
+TIER5_TF32_OPTS = ["no", "yes"]
+TIER5_AMP_OPTS = ["no", "yes"]
+TIER5_EPOCHS = 10
+
+
+rule all:
+    input:
+        expand(
+            "results/tier1_{dataclass}_{nw}_{pin}.csv",
+            dataclass=DATACLASSES, nw=NUM_WORKERS, pin=PIN_MEMORY,
+        ),
+        expand(
+            "results/tier2_{tf32}_{amp}.csv",
+            tf32=TF32_OPTS, amp=AMP_OPTS,
+        ),
+        expand(
+            "results/tier3_{config}_{gpu}.csv",
+            config=TIER3_CONFIGS.keys(), gpu=DATA_ON_GPU_OPTS,
+        ),
+        expand(
+            "results/tier4_{bs}_{tf32}_{amp}.csv",
+            bs=TIER4_BATCH_SIZES, tf32=TIER4_TF32_OPTS, amp=TIER4_AMP_OPTS,
+        ),
+        expand(
+            "results/tier5_{bs}_{tf32}_{amp}.csv",
+            bs=TIER5_BATCH_SIZES, tf32=TIER5_TF32_OPTS, amp=TIER5_AMP_OPTS,
+        ),
+        "benchmark_combined.csv"
+
+
+rule run_tier1:
+    """DataLoader benchmark: fixed precision (no tf32/amp, no data_on_gpu),
+    varying dataclass / num_workers / pin_memory. Uses default --model big."""
+    output:
+        csv="results/tier1_{dataclass}_{nw}_{pin}.csv"
+    params:
+        pin_flag=lambda wc: "--pin_memory" if wc.pin == "yes" else ""
+    shell:
+        """
+        mkdir -p results
+        python {SCRIPT} \
+            --device cuda \
+            --dataclass {wildcards.dataclass} \
+            --num_workers {wildcards.nw} \
+            {params.pin_flag} \
+            --epochs {TIER1_EPOCHS} \
+            --result_csv {output.csv}
+        """
+
+
+rule run_tier2:
+    """Precision benchmark: fixed loader settings
+    (fast / num_workers=4 / pin_memory), varying tf32 / mixed_precision."""
+    output:
+        csv="results/tier2_{tf32}_{amp}.csv"
+    params:
+        tf32_flag=lambda wc: "--tf32" if wc.tf32 == "yes" else "",
+        amp_flag=lambda wc: "--mixed_precision" if wc.amp == "yes" else "",
+    shell:
+        """
+        mkdir -p results
+        python {SCRIPT} \
+            --device cuda \
+            --dataclass fast \
+            --num_workers 4 \
+            --pin_memory \
+            {params.tf32_flag} \
+            {params.amp_flag} \
+            --epochs {TIER2_EPOCHS} \
+            --result_csv {output.csv}
+        """
+
+
+rule run_tier3:
+    """GPU-resident dataset benchmark: two loader configs (worst-case vs
+    tuned) crossed with --data_on_gpu on/off."""
+    output:
+        csv="results/tier3_{config}_{gpu}.csv"
+    params:
+        num_workers=lambda wc: TIER3_CONFIGS[wc.config]["num_workers"],
+        pin_flag=lambda wc: "--pin_memory" if TIER3_CONFIGS[wc.config]["pin_memory"] == "yes" else "",
+        gpu_flag=lambda wc: "--data_on_gpu" if wc.gpu == "yes" else "",
+    shell:
+        """
+        mkdir -p results
+        python {SCRIPT} \
+            --device cuda \
+            --dataclass fast \
+            --num_workers {params.num_workers} \
+            {params.pin_flag} \
+            {params.gpu_flag} \
+            --epochs {TIER3_EPOCHS} \
+            --result_csv {output.csv}
+        """
+
+
+rule run_tier4:
+    """Manual-batching benchmark: --model big --data_on_gpu --manual_batching
+    fixed, varying batch_size (256 / 8192) x tf32 x mixed_precision.
+    This is the test of whether removing DataLoader/Python overhead
+    entirely (manual_batching) finally makes precision flags matter --
+    if forward+backward dominate total time here, TF32/AMP should show
+    a real (not noise-level) difference, especially at batch_size=8192."""
+    output:
+        csv="results/tier4_{bs}_{tf32}_{amp}.csv"
+    params:
+        tf32_flag=lambda wc: "--tf32" if wc.tf32 == "yes" else "",
+        amp_flag=lambda wc: "--mixed_precision" if wc.amp == "yes" else "",
+    shell:
+        """
+        mkdir -p results
+        python {SCRIPT} \
+            --device cuda \
+            --dataclass fast \
+            --model big \
+            --data_on_gpu \
+            --manual_batching \
+            --batch_size {wildcards.bs} \
+            {params.tf32_flag} \
+            {params.amp_flag} \
+            --epochs {TIER4_EPOCHS} \
+            --result_csv {output.csv}
+        """
+
+
+rule run_tier5:
+    """MLP_huge benchmark: --model huge --data_on_gpu --manual_batching
+    fixed, varying batch_size (256 / 8192) x tf32 x mixed_precision.
+    Tests whether widening the model from 2048 to 8192 (~16x FLOPs per
+    matmul kernel) finally makes bs=256 compute-bound -- if precision
+    flags show a real speedup at bs=256 here when they didn't at bs=256
+    with --model big in Tier 4, that confirms the workshop lesson that
+    'work per kernel launch' (set by both batch size AND model width) is
+    the real variable determining whether TF32/AMP can help."""
+    output:
+        csv="results/tier5_{bs}_{tf32}_{amp}.csv"
+    params:
+        tf32_flag=lambda wc: "--tf32" if wc.tf32 == "yes" else "",
+        amp_flag=lambda wc: "--mixed_precision" if wc.amp == "yes" else "",
+    shell:
+        """
+        mkdir -p results
+        python {SCRIPT} \
+            --device cuda \
+            --dataclass fast \
+            --model huge \
+            --data_on_gpu \
+            --manual_batching \
+            --batch_size {wildcards.bs} \
+            {params.tf32_flag} \
+            {params.amp_flag} \
+            --epochs {TIER5_EPOCHS} \
+            --result_csv {output.csv}
+        """
+
+
+rule combine_results:
+    """Concatenate every per-run CSV into one combined results file.
+
+    Each input CSV has exactly one header line + one data row (written by
+    train_MLP_final3.py's --result_csv option), so combining them is just:
+    take the header from the first file, then the data row from every file.
+    """
+    input:
+        tier1=expand(
+            "results/tier1_{dataclass}_{nw}_{pin}.csv",
+            dataclass=DATACLASSES, nw=NUM_WORKERS, pin=PIN_MEMORY,
+        ),
+        tier2=expand(
+            "results/tier2_{tf32}_{amp}.csv",
+            tf32=TF32_OPTS, amp=AMP_OPTS,
+        ),
+        tier3=expand(
+            "results/tier3_{config}_{gpu}.csv",
+            config=TIER3_CONFIGS.keys(), gpu=DATA_ON_GPU_OPTS,
+        ),
+        tier4=expand(
+            "results/tier4_{bs}_{tf32}_{amp}.csv",
+            bs=TIER4_BATCH_SIZES, tf32=TIER4_TF32_OPTS, amp=TIER4_AMP_OPTS,
+        ),
+        tier5=expand(
+            "results/tier5_{bs}_{tf32}_{amp}.csv",
+            bs=TIER5_BATCH_SIZES, tf32=TIER5_TF32_OPTS, amp=TIER5_AMP_OPTS,
+        ),
+    output:
+        csv="benchmark_combined.csv"
+    run:
+        all_inputs = (list(input.tier1) + list(input.tier2)
+                     + list(input.tier3) + list(input.tier4)
+                     + list(input.tier5))
+
+        with open(output.csv, "w") as out_f:
+            header_written = False
+            for path in all_inputs:
+                with open(path) as f:
+                    lines = f.readlines()
+                if not lines:
+                    continue
+                if not header_written:
+                    out_f.write(lines[0])
+                    header_written = True
+                out_f.writelines(lines[1:])
