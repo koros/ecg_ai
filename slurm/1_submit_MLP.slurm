@@ -6,7 +6,6 @@
 #SBATCH -p gpu_h100
 #SBATCH --mincpus=4
 #SBATCH --gres=gpu:1
-#####SBATCH -o DNA_out_100000000_N1
 
 source  /users/${USER}/ecg_ai/modules_for_ecg_ai
 . /users/${USER}/.jupyter_virtualenvs/HPC_pytorch_AI/bin/activate

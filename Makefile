@@ -15,6 +15,7 @@ data-full:
 	python3 scripts/download_data.py --mode full
 
 copy-data:
+	mkdir -p ./data/raw
 	cp -r /scratch/training/ecg_ltafdb/ltafdb ./data/raw/ltafdb
 
 preprocess:
