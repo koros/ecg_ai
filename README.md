@@ -351,21 +351,6 @@ fig.savefig("resources.png", dpi=150, bbox_inches="tight")
 `-- Pytorch.pdf          # workshop slides
 ```
 
-## Notes and Caveats
-
-- `scripts/download_data.py` appears to be a draft and currently contains
-  syntax/order issues around `args` and `DATABASE`. Use the PhysioNet links
-  above or the HPC `make copy-data` path until that script is corrected.
-- The Makefile target `make train` points to `scripts/train.py`, which is not
-  present in this repository. Use the explicit training scripts documented
-  above.
-- Some older benchmark files refer to stale module names such as
-  `src.dataset_cached` or older script names in comments. The maintained
-  dataset implementations are in `src/dataset.py`.
-- GPU-resident dataset modes require the full processed dataset to fit in GPU
-  memory.
-- DDP scripts use NCCL and are intended for CUDA GPUs. CPU and Apple MPS are
-  suitable for the simple MLP scripts, not for multi-GPU scaling.
 
 ## License
 
